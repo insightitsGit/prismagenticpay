@@ -26,12 +26,20 @@ class StripeRail:
         api_key: str,
         api_base: str = "https://api.stripe.com",
         transport: httpx.BaseTransport | None = None,
+        *,
+        return_url: str = "",
     ):
         if not api_key:
             raise StripeRailError("STRIPE_API_KEY is required")
         if api_key.startswith("pk_"):
             raise StripeRailError("publishable keys cannot capture funds; use a secret key")
         self.api_key = api_key
+        if return_url:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(return_url)
+            if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password:
+                raise StripeRailError("return_url must be an absolute HTTP(S) URL without credentials")
+        self.return_url = return_url
         self.api_base = api_base.rstrip("/")
         self._client = httpx.Client(
             base_url=self.api_base,
@@ -67,6 +75,8 @@ class StripeRail:
                 "confirm": "true",
                 "capture_method": "manual",
                 "confirmation_method": "automatic",
+                "payment_method_types[0]": "card",
+                **({"return_url": self.return_url} if self.return_url else {}),
                 "metadata[payment_hash]": decision.payment_hash,
                 "metadata[authorization_id]": decision.authorization_id,
                 "metadata[operation_id]": operation_id,

@@ -15,7 +15,7 @@ def test_real_stripe_sandbox_capture_and_refund(authorizer, proposal, authority)
     proposal = proposal.model_copy(update={"idempotency_nonce": uuid.uuid4().hex, "amount_cents": 100})
     decision = authorizer.process_authorization(proposal, authority, now=now, fact_metadata=fresh_metadata(now))
     assert decision.status.value == "AUTHORIZED"
-    rail = StripeRail(key)
+    rail = StripeRail(key, return_url=os.getenv("STRIPE_RETURN_URL", ""))
     operation = "sandbox_" + uuid.uuid4().hex
     try:
         captured = rail.capture(proposal, decision, 100, "pm_card_visa", operation_id=operation)

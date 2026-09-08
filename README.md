@@ -6,7 +6,7 @@ PrismAgenticPay is a Python policy-authority service for **agentic payments**. I
 
 Built for teams developing autonomous purchasing agents, procurement workflows, and AI applications that need auditable control over spending.
 
-**Author: Amin Parva** · **Version: 1.4.0** · **Python: 3.11+** · **License: MIT**
+**Author: Amin Parva** · **Version: 1.4.1** · **Python: 3.11+** · **License: MIT**
 
 [Quick start](#quick-start) · [Architecture](#how-agent-payment-authorization-works) · [HTTP API](#http-api) · [Testing](#testing-and-validation) · [Deployment guide](docs/PRODUCTION.md)
 
@@ -189,3 +189,8 @@ Before enabling real-money traffic, complete the real Stripe sandbox test and de
 **Amin Parva** — author of PrismAgenticPay.
 
 PrismAgenticPay is licensed under the MIT license, as declared in its [package metadata](pyproject.toml).
+
+
+## Release status
+
+Experimental library; single-host SQLite persistence. Stripe confirmation is card-only. Configure an application-owned return endpoint with STRIPE_RETURN_URL. Customer authentication challenges require integration work. See [release notes](CHANGELOG.md) and [publishing checks](docs/RELEASING.md).

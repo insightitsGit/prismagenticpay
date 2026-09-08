@@ -41,7 +41,8 @@ def build_ledger(settings: Settings):
 def build_rails(settings: Settings) -> dict:
     rails = {}
     if settings.stripe_api_key:
-        rails["stripe"] = StripeRail(settings.stripe_api_key, api_base=settings.stripe_api_base)
+        rails["stripe"] = StripeRail(settings.stripe_api_key, api_base=settings.stripe_api_base,
+                                     return_url=settings.stripe_return_url)
     if settings.coinbase_api_key or settings.iso8583_host or set(settings.allowed_rails) - {"stripe"}:
         raise RuntimeError("only Stripe settlement is supported; Coinbase and ISO authorization are experimental")
     return rails

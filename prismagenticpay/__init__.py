@@ -12,7 +12,7 @@ from prismagenticpay.domain.models import (
 )
 from prismagenticpay.state.ledger import AtomicAuthorityLedger, HoldStatus, MultiBucketReservation
 
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 __all__ = [
     "AtomicAuthorityLedger",

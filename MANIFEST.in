@@ -1,0 +1,5 @@
+include LICENSE CHANGELOG.md requirements-tested.txt
+recursive-include docs *.md
+exclude docs/COMPANY_STRIPE_HANDOFF.md docs/COMPANY_STRIPE_RETURN_REVIEW.md
+recursive-include tests *.py
+global-exclude *.sqlite *.db *.pyc

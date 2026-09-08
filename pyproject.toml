@@ -1,18 +1,22 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismagenticpay"
-version = "1.4.0"
+version = "1.4.1"
 description = "Deterministic policy-authority kernel for autonomous agent payments."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["agentic payments", "payment authorization", "spend controls", "stripe", "AP2"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12", "Programming Language :: Python :: 3.13", "Programming Language :: Python :: 3.14"]
 authors = [{ name = "Amin Parva" }]
 dependencies = [
     "pydantic>=2.6",
-    "prismthinker>=1.1.0",
+    "prismthinker>=1.2.0",
+    "httpx>=0.27",
     "PyJWT[crypto]>=2.8",
     "cryptography>=42.0",
 ]
@@ -20,6 +24,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.27"]
 api = ["fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/insightitsGit/prismagenticpay"
+Repository = "https://github.com/insightitsGit/prismagenticpay"
+Documentation = "https://github.com/insightitsGit/prismagenticpay#readme"
+Issues = "https://github.com/insightitsGit/prismagenticpay/issues"
 
 [tool.setuptools.packages.find]
 include = ["prismagenticpay*"]

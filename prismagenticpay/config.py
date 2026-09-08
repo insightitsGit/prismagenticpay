@@ -33,6 +33,7 @@ class Settings(BaseModel):
 
     stripe_api_key: str = ""
     stripe_api_base: str = "https://api.stripe.com"
+    stripe_return_url: str = ""
     coinbase_api_key: str = ""
     coinbase_api_base: str = "https://api.commerce.coinbase.com"
     iso8583_host: str = ""
@@ -72,6 +73,7 @@ class Settings(BaseModel):
             redis_url=os.getenv("PAP_REDIS_URL", ""),
             stripe_api_key=os.getenv("STRIPE_API_KEY", ""),
             stripe_api_base=os.getenv("STRIPE_API_BASE", "https://api.stripe.com"),
+            stripe_return_url=os.getenv("STRIPE_RETURN_URL", ""),
             coinbase_api_key=os.getenv("COINBASE_COMMERCE_API_KEY", ""),
             coinbase_api_base=os.getenv("COINBASE_COMMERCE_API_BASE", "https://api.commerce.coinbase.com"),
             iso8583_host=os.getenv("PAP_ISO8583_HOST", ""),
