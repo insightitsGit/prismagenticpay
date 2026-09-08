@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import fresh_metadata
+
 from datetime import datetime, timezone
 
 import httpx
@@ -85,7 +87,7 @@ def test_stripe_rail_uses_http_and_rejects_pan(proposal, authorizer, authority, 
         return httpx.Response(404, json={"error": "missing"})
 
     rail = StripeRail("sk_test_123", transport=httpx.MockTransport(handler))
-    decision = authorizer.process_authorization(proposal, authority, now=frozen_now)
+    decision = authorizer.process_authorization(proposal, authority, now=frozen_now, fact_metadata=fresh_metadata(frozen_now),)
     result = rail.capture(proposal, decision, 2500, "pm_card_visa")
     assert result.ok and result.reference == "pi_123"
     with pytest.raises(StripeRailError):
@@ -107,26 +109,21 @@ def test_sap_connector_maps_odata(proposal):
 def test_receipt_roundtrip(proposal, authorizer, authority, frozen_now):
     key = ec.generate_private_key(ec.SECP256R1())
     issuer = ReceiptIssuer(key)
-    decision = authorizer.process_authorization(proposal, authority, now=frozen_now)
+    decision = authorizer.process_authorization(proposal, authority, now=frozen_now, fact_metadata=fresh_metadata(frozen_now),)
     receipt = issuer.issue(proposal, decision, rail_id="stripe", rail_reference="pi_1", outcome="captured")
     claims = issuer.verify(receipt.token, key.public_key())
     assert claims["payment_hash"] == decision.payment_hash
 
 
-def test_api_key_required_in_production(authorizer, gateway, proposal, authority):
-    settings = Settings(environment="production", api_keys=["secret-key"])
+def test_api_key_required_in_production(authorizer, gateway, proposal, authority, tmp_path):
+    from conftest import write_identities
+    settings = Settings(environment="production", identity_registry_path=write_identities(tmp_path / "identities.json"))
     client = TestClient(create_app(authorizer, gateway, settings=settings))
-    denied = client.post(
-        "/v1/authorize",
-        json={"proposal": proposal.model_dump(mode="json"), "authority": authority.model_dump(mode="json")},
-    )
-    assert denied.status_code == 401
-    allowed = client.post(
-        "/v1/authorize",
-        headers={"X-API-Key": "secret-key"},
-        json={"proposal": proposal.model_dump(mode="json"), "authority": authority.model_dump(mode="json")},
-    )
-    assert allowed.status_code == 200
+    assert client.get("/v1/audit").status_code == 401
+    assert client.get("/v1/audit", headers={"X-API-Key": "local-scenario-key"}).status_code == 200
+    assert client.get("/console").status_code == 401
+    assert client.post("/v1/authorize", headers={"X-API-Key": "local-scenario-key"},
+        json={"proposal": proposal.model_dump(mode="json"), "authority": authority.model_dump(mode="json")}).status_code == 403
 
 
 def test_console_and_health(authorizer, gateway):

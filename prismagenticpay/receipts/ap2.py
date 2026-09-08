@@ -36,6 +36,7 @@ class ReceiptIssuer:
         rail_reference: str,
         outcome: str,
         now: Optional[datetime] = None,
+        amount_cents: Optional[int] = None,
     ) -> PaymentReceipt:
         stamp = now or datetime.now(timezone.utc)
         claims = {
@@ -46,7 +47,7 @@ class ReceiptIssuer:
             "authorization_id": decision.authorization_id,
             "payment_hash": decision.payment_hash,
             "mandate_hash": proposal.mandate_hash,
-            "amount_cents": proposal.amount_cents,
+            "amount_cents": proposal.amount_cents if amount_cents is None else amount_cents,
             "currency": proposal.currency,
             "rail_id": rail_id,
             "rail_reference": rail_reference,

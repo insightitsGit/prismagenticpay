@@ -59,7 +59,7 @@ class PrismThinkerPaymentEvaluator:
         check_time = now or datetime.now(timezone.utc)
         facts = self._structured_facts(proposal, authority)
         specs = self._fact_specs()
-        metadata = fact_metadata if fact_metadata is not None else self._fresh_metadata(facts, check_time)
+        metadata = fact_metadata or {}
         facts = FactTtlValidator.filter_fresh_facts(facts, metadata, now=check_time)
 
         context = ReasoningContext(

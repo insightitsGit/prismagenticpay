@@ -1,76 +1,82 @@
-"""Crash-safe SQLite snapshot of AtomicAuthorityLedger."""
+"""Transactional SQLite workflow store; reload under the database writer lock.
 
-from __future__ import annotations
-
+All workflow records and ledger mutations commit together. No network work is
+performed inside a transaction. Multiple local connections serialize via SQLite.
+"""
+from contextlib import contextmanager
+from copy import deepcopy
 import json
 import sqlite3
-from datetime import datetime
-from typing import Optional, Tuple
+import threading
 
-from prismagenticpay.state.ledger import (
-    AtomicAuthorityLedger,
-    BucketAvailability,
-    MultiBucketReservation,
-)
+from prismagenticpay.state.ledger import AtomicAuthorityLedger
 
 
 class SqliteAuthorityLedger:
-    def __init__(
-        self,
-        path: str,
-        session_budget_cents: int,
-        daily_budget_cents: int,
-        mandate_budget_cents: int,
-        default_hold_ttl_seconds: int = 120,
-    ):
-        self._mem = AtomicAuthorityLedger(
-            session_budget_cents=session_budget_cents,
-            daily_budget_cents=daily_budget_cents,
-            mandate_budget_cents=mandate_budget_cents,
-            default_hold_ttl_seconds=default_hold_ttl_seconds,
-        )
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS ledger_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL)"
-        )
-        self._conn.commit()
-        self._load()
-        self._mem._on_mutate = self._persist
+    def __init__(self, path, session_budget_cents, daily_budget_cents,
+                 mandate_budget_cents, default_hold_ttl_seconds=120):
+        self._mem = AtomicAuthorityLedger(session_budget_cents, daily_budget_cents,
+                                         mandate_budget_cents, default_hold_ttl_seconds)
+        self._lock = threading.RLock()
+        self._depth = 0
+        self._conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS ledger_snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL)")
+        with self.transaction():
+            pass
 
-    def _load(self) -> None:
-        row = self._conn.execute("SELECT payload FROM ledger_snapshot WHERE id = 1").fetchone()
-        if row:
-            self._mem.load_snapshot(json.loads(row[0]))
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            outer = self._depth == 0
+            before = None
+            if outer:
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    row = self._conn.execute("SELECT payload FROM ledger_snapshot WHERE id = 1").fetchone()
+                    if row:
+                        self._mem.load_snapshot(json.loads(row[0]))
+                    before = self._mem.snapshot()
+                except BaseException:
+                    self._conn.rollback()
+                    raise
+            self._depth += 1
+            try:
+                yield self
+                if outer:
+                    self._persist(self._mem.snapshot())
+                    self._conn.commit()
+            except BaseException:
+                if outer:
+                    self._conn.rollback()
+                    self._mem.load_snapshot(before)
+                raise
+            finally:
+                self._depth -= 1
 
-    def _persist(self, snapshot: dict) -> None:
-        payload = json.dumps(snapshot)
+    def _persist(self, snapshot):
         self._conn.execute(
             "INSERT INTO ledger_snapshot (id, payload) VALUES (1, ?) "
             "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
-            (payload,),
+            (json.dumps(snapshot),),
         )
-        self._conn.commit()
 
-    def inspect_available(self, **kwargs) -> BucketAvailability:
-        return self._mem.inspect_available(**kwargs)
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        method = getattr(self._mem, name)
+        if not callable(method):
+            raise AttributeError(name)
+        def call(*args, **kwargs):
+            with self.transaction():
+                return deepcopy(method(*args, **kwargs))
+        return call
 
-    def reserve(self, *args, **kwargs) -> Tuple[bool, Optional[str], Optional[MultiBucketReservation], str]:
-        return self._mem.reserve(*args, **kwargs)
+    def readiness(self):
+        with self.transaction():
+            return self._conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
-    def commit(self, reservation_id: str, now: Optional[datetime] = None) -> Tuple[bool, str]:
-        return self._mem.commit(reservation_id, now=now)
-
-    def release(self, reservation_id: str, *, gathered: bool = False) -> bool:
-        return self._mem.release(reservation_id, gathered=gathered)
-
-    def expire(self, reservation_id: str, now: Optional[datetime] = None) -> Tuple[bool, str]:
-        return self._mem.expire(reservation_id, now=now)
-
-    def get(self, reservation_id: str) -> Optional[MultiBucketReservation]:
-        return self._mem.get(reservation_id)
-
-    def capture(self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None) -> Tuple[bool, str]:
-        return self._mem.capture(reservation_id, amount_cents, now=now)
-
-    def refund(self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None) -> Tuple[bool, str]:
-        return self._mem.refund(reservation_id, amount_cents, now=now)
+    def close(self):
+        with self._lock:
+            self._conn.close()

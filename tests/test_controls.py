@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import fresh_metadata
+
 from datetime import timedelta
 
 import pytest
@@ -13,7 +15,7 @@ from prismagenticpay.state.sqlite_ledger import SqliteAuthorityLedger
 
 def test_same_party_cannot_approve_review(authorizer, proposal, authority, frozen_now):
     dual = authority.model_copy(update={"requires_dual_signature": True})
-    decision = authorizer.process_authorization(proposal, dual, now=frozen_now)
+    decision = authorizer.process_authorization(proposal, dual, now=frozen_now, fact_metadata=fresh_metadata(frozen_now),)
     with pytest.raises(ValueError, match="distinct"):
         authorizer.approve_review(decision.review_case_id, proposal.principal_id, now=frozen_now)
 

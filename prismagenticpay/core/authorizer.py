@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import threading
+import hashlib
+import json
+from functools import wraps
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -19,9 +22,8 @@ from prismagenticpay.domain.models import (
     PaymentAuthStatus,
     PaymentProposal,
 )
-from prismagenticpay.policies.corporate import CORPORATE_POLICY_VERSION
-from prismagenticpay.state.audit import AuditEvent, AuditLog
-from prismagenticpay.state.cases import CaseStatus, CaseStore
+from prismagenticpay.state.audit import AuditEvent, AuditLog, DurableAuditLog
+from prismagenticpay.state.cases import CaseStatus, CaseStore, DurableCaseStore
 from prismagenticpay.state.ledger import AtomicAuthorityLedger
 
 _DIRECTIVE_STATUS = {
@@ -30,6 +32,14 @@ _DIRECTIVE_STATUS = {
     "ESCALATE": PaymentAuthStatus.REVIEW,
     "GATHER": PaymentAuthStatus.STALLED,
 }
+
+
+def _atomic(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self.ledger.transaction():
+            return method(self, *args, **kwargs)
+    return call
 
 
 class PrismPaymentAuthorizer:
@@ -47,11 +57,12 @@ class PrismPaymentAuthorizer:
         self.evaluator = PrismThinkerPaymentEvaluator(policies)
         self.signer = signer or DecisionSigner.generate()
         self.clock = clock or SystemClock()
-        self.cases = cases or CaseStore()
-        self.audit = audit or AuditLog()
+        self.cases = cases or DurableCaseStore(ledger)
+        self.audit = audit or DurableAuditLog(ledger)
         self._lock = threading.Lock()
         self._decisions: Dict[str, AuthorizationDecision] = {}
 
+    @_atomic
     def process_authorization(
         self,
         proposal: PaymentProposal,
@@ -65,10 +76,18 @@ class PrismPaymentAuthorizer:
         if auth_validity_seconds <= 0:
             raise ValueError("auth_validity_seconds must be positive")
 
+        saved_policies = self.ledger.get_record("workflow", "policies")
+        if saved_policies is not None:
+            self.evaluator.policies = [PolicyRule.model_validate(p) for p in saved_policies]
         current_time = now or self.clock.now()
+        if proposal.mandate_expires_at is not None and current_time >= proposal.mandate_expires_at:
+            raise ValueError("payment mandate expired")
         payment_hash = proposal.compute_canonical_payment_hash()
         scope_session = session_id or f"session:{proposal.principal_id}"
 
+        terminal = self.ledger.get_record("terminal", payment_hash)
+        if terminal:
+            return AuthorizationDecision.model_validate(terminal)
         available = self.ledger.inspect_available(
             session_id=scope_session,
             principal_id=proposal.principal_id,
@@ -86,7 +105,6 @@ class PrismPaymentAuthorizer:
                 "mandate_remaining_cents": min(
                     authority.mandate_remaining_cents, available.mandate_remaining_cents
                 ),
-                "snapshot_taken_at": current_time,
             }
         )
 
@@ -109,6 +127,8 @@ class PrismPaymentAuthorizer:
                 expires_at=current_time,
                 rationale=msg,
             )
+            if res_id is None:
+                self.ledger.put_record("terminal", payment_hash, decision.model_dump(mode="json"))
             self._audit("authorize.refused", decision, actor_id, msg)
             return decision
 
@@ -116,34 +136,21 @@ class PrismPaymentAuthorizer:
             cached = self._cached(payment_hash)
             if cached is not None:
                 return cached
-            if hold is None:
-                decision = self._decision(
-                    status=PaymentAuthStatus.REFUSED,
-                    directive="REFUSE",
-                    proposal=proposal,
-                    authority=evaluation_authority,
-                    payment_hash=payment_hash,
-                    now=current_time,
-                    expires_at=current_time,
-                    rationale=msg,
-                )
-                self._audit("authorize.refused", decision, actor_id, msg)
-                return decision
-            reconstructed = self._decision(
-                status=PaymentAuthStatus.AUTHORIZED,
-                directive="EXECUTE",
+            # A hold proves only that budget was reserved, never policy approval.
+            # An interrupted legacy workflow may lack a decision: fail closed after restart or
+            # while another request is still evaluating this payment.
+            decision = self._decision(
+                status=PaymentAuthStatus.REFUSED,
+                directive="REFUSE",
                 proposal=proposal,
                 authority=evaluation_authority,
                 payment_hash=payment_hash,
-                now=hold.created_at,
-                expires_at=min(hold.expires_at, current_time + timedelta(seconds=auth_validity_seconds)),
-                rationale=msg,
-                reservation_id=res_id,
-                allowed_tools=["settle_payment_rail"],
+                now=current_time,
+                expires_at=current_time,
+                rationale="IN_FLIGHT_DECISION_UNAVAILABLE: original decision required",
             )
-            self._store(payment_hash, reconstructed)
-            self._audit("authorize.replay_inflight", reconstructed, actor_id, msg)
-            return reconstructed
+            self._audit("authorize.replay_unavailable", decision, actor_id, decision.rationale)
+            return decision
 
         outcome = self.evaluator.evaluate_proposal(
             proposal,
@@ -206,6 +213,7 @@ class PrismPaymentAuthorizer:
                     proposal=proposal,
                     authority=evaluation_authority,
                     missing_fact_keys=list(outcome.gather_fact_keys),
+                    session_id=scope_session,
                     now=current_time,
                 )
                 decision = self.signer.sign(
@@ -234,6 +242,7 @@ class PrismPaymentAuthorizer:
         self._audit("authorize.authorized", decision, actor_id, "EXECUTE")
         return decision
 
+    @_atomic
     def approve_review(
         self,
         case_id: str,
@@ -241,6 +250,8 @@ class PrismPaymentAuthorizer:
         now: Optional[datetime] = None,
         auth_validity_seconds: int = 60,
     ) -> AuthorizationDecision:
+        if auth_validity_seconds <= 0:
+            raise ValueError("auth_validity_seconds must be positive")
         current_time = now or self.clock.now()
         case = self.cases.get_review(case_id)
         if case is None or case.status is not CaseStatus.OPEN:
@@ -254,6 +265,8 @@ class PrismPaymentAuthorizer:
         authority = self.cases.authority_for(case.payment_hash)
         if proposal is None or authority is None:
             raise ValueError("review case is missing the original proposal")
+        if proposal.mandate_expires_at is not None and current_time >= proposal.mandate_expires_at:
+            raise ValueError("payment mandate expired")
         self.cases.mark_review(case_id, CaseStatus.APPROVED, approver_id, current_time)
         decision = self._decision(
             status=PaymentAuthStatus.AUTHORIZED,
@@ -272,6 +285,7 @@ class PrismPaymentAuthorizer:
         self._audit("review.approved", decision, approver_id, case_id)
         return decision
 
+    @_atomic
     def deny_review(self, case_id: str, approver_id: str, now: Optional[datetime] = None) -> AuthorizationDecision:
         current_time = now or self.clock.now()
         case = self.cases.get_review(case_id)
@@ -297,6 +311,7 @@ class PrismPaymentAuthorizer:
         self._audit("review.denied", decision, approver_id, case_id)
         return decision
 
+    @_atomic
     def resume_gather(
         self,
         case_id: str,
@@ -314,24 +329,27 @@ class PrismPaymentAuthorizer:
         if proposal is None:
             raise ValueError("gather case is missing the original proposal")
         current_time = now or self.clock.now()
-        self.cases.mark_gather(case_id, CaseStatus.RESUMED, current_time)
-        return self.process_authorization(
+        if session_id is not None and session_id != case.session_id:
+            raise ValueError("gather session cannot change")
+        result = self.process_authorization(
             proposal,
             authority,
             auth_validity_seconds=auth_validity_seconds,
-            session_id=session_id,
+            session_id=case.session_id,
             fact_metadata=fact_metadata,
             now=current_time,
             actor_id=actor_id,
         )
 
+        self.cases.mark_gather(case_id, CaseStatus.RESUMED, current_time)
+        return result
+
     def _cached(self, payment_hash: str) -> Optional[AuthorizationDecision]:
-        with self._lock:
-            return self._decisions.get(payment_hash)
+        data = self.ledger.get_record("decisions", payment_hash)
+        return AuthorizationDecision.model_validate(data) if data else None
 
     def _store(self, payment_hash: str, decision: AuthorizationDecision) -> None:
-        with self._lock:
-            self._decisions[payment_hash] = decision
+        self.ledger.put_record("decisions", payment_hash, decision.model_dump(mode="json"))
 
     def _audit(self, event_type: str, decision: AuthorizationDecision, actor_id: str, detail: str) -> None:
         self.audit.append(
@@ -362,6 +380,8 @@ class PrismPaymentAuthorizer:
         review_case_id: Optional[str] = None,
         gather_case_id: Optional[str] = None,
     ) -> AuthorizationDecision:
+        if proposal.mandate_expires_at is not None:
+            expires_at = min(expires_at, proposal.mandate_expires_at)
         unsigned = AuthorizationDecision(
             authorization_id=f"auth_{uuid.uuid4().hex[:12]}",
             status=status,
@@ -372,7 +392,7 @@ class PrismPaymentAuthorizer:
             payment_hash=payment_hash,
             authority_snapshot_hash=authority.compute_snapshot_hash(),
             mandate_hash=proposal.mandate_hash,
-            policy_version=CORPORATE_POLICY_VERSION,
+            policy_version=hashlib.sha256(json.dumps([p.model_dump(mode="json") for p in self.evaluator.policies], sort_keys=True).encode()).hexdigest(),
             rationale=rationale,
             allowed_tools=list(allowed_tools or []),
             gather_fact_keys=list(gather_fact_keys or []),

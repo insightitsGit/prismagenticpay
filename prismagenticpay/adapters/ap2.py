@@ -150,6 +150,7 @@ class AP2IngressAdapter:
             mandate_type="closed_payment",
             mandate_hash=mandate_hash,
             idempotency_nonce=claims.nonce,
+            mandate_expires_at=datetime.fromtimestamp(claims.exp, timezone.utc),
         )
 
     def _decode_payment_token(self, token: str, now: datetime) -> tuple[str, Mapping[str, Any]]:
@@ -170,15 +171,27 @@ class AP2IngressAdapter:
         payload = dict(
             self._decode_signed(issuer_jwt, self.payment_public_key, now, "closed payment SD-JWT")
         )
+        if payload.get("_sd_alg", "sha-256") != "sha-256":
+            raise AP2VerificationError("unsupported disclosure digest algorithm")
         digest_set = set(payload.get("_sd") or [])
+        seen = set()
         for disclosure in disclosures:
             digest = _b64url(hashlib.sha256(disclosure.encode("ascii")).digest())
             if digest not in digest_set:
                 raise AP2VerificationError("SD-JWT disclosure digest is not in _sd")
-            decoded = json.loads(_b64url_decode(disclosure))
+            if digest in seen:
+                raise AP2VerificationError("duplicate disclosure")
+            seen.add(digest)
+            try:
+                decoded = json.loads(_b64url_decode(disclosure))
+            except (ValueError, UnicodeError) as exc:
+                raise AP2VerificationError("malformed disclosure") from exc
             if not isinstance(decoded, list) or len(decoded) != 3:
                 raise AP2VerificationError("SD-JWT disclosure must be [salt, name, value]")
-            payload[str(decoded[1])] = decoded[2]
+            name = decoded[1]
+            if not isinstance(name, str) or name in payload or name.startswith("_"):
+                raise AP2VerificationError("disclosure name collides with existing claim")
+            payload[name] = decoded[2]
         payload.pop("_sd", None)
         if kb_jwt:
             presentation = issuer_jwt + "~" + "~".join(disclosures) + "~"

@@ -25,7 +25,7 @@ class Settings(BaseModel):
     hold_ttl_seconds: int = 120
 
     api_keys: List[str] = Field(default_factory=list)
-    allowed_rails: List[str] = Field(default_factory=lambda: ["stripe", "iso8583", "coinbase", "test"])
+    allowed_rails: List[str] = Field(default_factory=lambda: ["stripe"])
     rate_limit_per_minute: int = 120
 
     database_url: str = "sqlite:///./prismagenticpay.sqlite"
@@ -44,6 +44,8 @@ class Settings(BaseModel):
     coupa_base_url: str = ""
     coupa_token: str = ""
 
+    identity_registry_path: str = ""
+    authority_registry_path: str = ""
     trust_registry_path: str = ""
     signing_seed_hex: str = ""
     cors_origins: List[str] = Field(default_factory=list)
@@ -64,7 +66,7 @@ class Settings(BaseModel):
             mandate_budget_cents=int(os.getenv("PAP_MANDATE_BUDGET_CENTS", "2000000")),
             hold_ttl_seconds=int(os.getenv("PAP_HOLD_TTL_SECONDS", "120")),
             api_keys=_split(os.getenv("PAP_API_KEYS", "")),
-            allowed_rails=_split(os.getenv("PAP_ALLOWED_RAILS", "stripe,iso8583,coinbase,test")),
+            allowed_rails=_split(os.getenv("PAP_ALLOWED_RAILS", "stripe")),
             rate_limit_per_minute=int(os.getenv("PAP_RATE_LIMIT_PER_MINUTE", "120")),
             database_url=os.getenv("PAP_DATABASE_URL", "sqlite:///./prismagenticpay.sqlite"),
             redis_url=os.getenv("PAP_REDIS_URL", ""),
@@ -79,6 +81,8 @@ class Settings(BaseModel):
             netsuite_token=os.getenv("PAP_NETSUITE_TOKEN", ""),
             coupa_base_url=os.getenv("PAP_COUPA_BASE_URL", ""),
             coupa_token=os.getenv("PAP_COUPA_TOKEN", ""),
+            identity_registry_path=os.getenv("PAP_IDENTITY_REGISTRY_PATH", ""),
+            authority_registry_path=os.getenv("PAP_AUTHORITY_REGISTRY_PATH", ""),
             trust_registry_path=os.getenv("PAP_TRUST_REGISTRY_PATH", ""),
             signing_seed_hex=os.getenv("PAP_SIGNING_SEED_HEX", ""),
             cors_origins=_split(os.getenv("PAP_CORS_ORIGINS", "")),

@@ -1,8 +1,8 @@
-# PrismAgenticPay — Kernel Specification (v1.2.0)
+# PrismAgenticPay — Kernel Specification (v1.4.0)
 
 | Field | Value |
 |---|---|
-| **Version** | 1.3.0 |
+| **Version** | 1.4.0 |
 | **Status** | Frozen kernel |
 | **Core Engine** | PrismThinker contract via `to_chorusgraph()` |
 | **Primary Ingress** | AP2 v0.2 closed payment mandate (JWS or SD-JWT) |
@@ -61,6 +61,9 @@ Not implemented (and not claimed as done):
 
 ## HTTP API
 
+Production uses `/v1/authorize/ap2` with server-owned authority and authenticated identity scopes. Raw `/v1/authorize` and `/v1/settle` below are development harness routes and return 403 in production. Refunds require a stable logical operation ID. The supported production rail is Stripe; cross-currency settlement is disabled. See [PRODUCTION.md](PRODUCTION.md) for roles and recovery endpoints.
+
+
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/v1/authorize` | Proposal + authority → decision |
@@ -90,7 +93,7 @@ Not implemented (and not claimed as done):
 
 ## Persistence
 
-`AtomicAuthorityLedger` is the in-memory reference. `SqliteAuthorityLedger` writes a full snapshot on every mutation. That is crash-safe for a single process. It is not a multi-region cluster.
+`AtomicAuthorityLedger` is the in-memory reference. `SqliteAuthorityLedger` reloads under `BEGIN IMMEDIATE` and atomically commits a full workflow snapshot: holds, decisions, cases, audit, policies and operations. Processing holds reserve capacity across unknown provider outcomes. Local SQLite connections serialize safely; this is not a multi-region cluster.
 
 ## Out of kernel scope
 

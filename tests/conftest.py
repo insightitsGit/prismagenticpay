@@ -82,3 +82,26 @@ def authorizer(ledger: AtomicAuthorityLedger, signer: DecisionSigner) -> PrismPa
 @pytest.fixture
 def gateway(ledger: AtomicAuthorityLedger, signer: DecisionSigner) -> SettlementGatewayHarness:
     return SettlementGatewayHarness(ledger, signer=signer)
+
+
+def fresh_metadata(now=None):
+    """Explicit trusted test-source metadata; production never fabricates it."""
+    from prismagenticpay.connectors.base import FactMeta
+    from prismagenticpay.core.evaluator import PrismThinkerPaymentEvaluator
+    stamp = now or datetime.now(timezone.utc)
+    return {key: FactMeta(source="test_authority", fetched_at=stamp, ttl_seconds=300)
+            for key in PrismThinkerPaymentEvaluator._fact_specs()}
+
+
+def write_identities(path):
+    import hashlib, json
+    records = [
+        dict(subject="employee", roles=["authorize", "capture", "refund", "audit"],
+             principal_id="employee", agent_id="purchasing-agent", key="local-scenario-key"),
+        dict(subject="employee", roles=["review"], key="employee-review-key"),
+        dict(subject="finance-controller", roles=["review", "audit", "policy", "reconcile"], key="controller-key"),
+    ]
+    for record in records:
+        record["key_sha256"] = hashlib.sha256(record.pop("key").encode()).hexdigest()
+    path.write_text(json.dumps({"identities": records}))
+    return str(path)

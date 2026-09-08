@@ -32,7 +32,7 @@ class SettlementGatewayHarness:
         self.ledger = ledger
         self.signer = signer
         self.clock = clock or SystemClock()
-        self.allowed_rails = allowed_rails or {"stripe", "iso8583", "test"}
+        self.allowed_rails = allowed_rails if allowed_rails is not None else {"stripe", "iso8583", "test"}
 
     def settle_transaction(
         self,
@@ -72,6 +72,8 @@ class SettlementGatewayHarness:
         return success
 
     def settle(self, request: SettlementRequest, now: Optional[datetime] = None) -> bool:
+        if request.mandate_hash != request.authorization.mandate_hash or request.authority_snapshot_hash != request.authorization.authority_snapshot_hash:
+            return False
         return self.settle_transaction(
             request.authorization,
             request.payment_hash,

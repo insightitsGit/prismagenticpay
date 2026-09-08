@@ -38,6 +38,7 @@ class GatherCase(BaseModel):
     case_id: str
     authorization_id: str
     payment_hash: str
+    session_id: Optional[str] = None
     missing_fact_keys: List[str] = Field(default_factory=list)
     status: CaseStatus = CaseStatus.OPEN
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -85,6 +86,7 @@ class CaseStore:
         proposal: PaymentProposal,
         authority: AuthorityState,
         missing_fact_keys: List[str],
+        session_id: Optional[str] = None,
         now: datetime,
     ) -> GatherCase:
         case = GatherCase(
@@ -92,6 +94,7 @@ class CaseStore:
             authorization_id=authorization_id,
             payment_hash=payment_hash,
             missing_fact_keys=list(missing_fact_keys),
+            session_id=session_id,
             created_at=now,
         )
         with self._lock:
@@ -130,3 +133,34 @@ class CaseStore:
             case.status = status
             case.resolved_at = now
             return case
+
+
+class DurableCaseStore(CaseStore):
+    """Cases participate in the same transaction as decisions and holds."""
+    def __init__(self, ledger):
+        super().__init__()
+        self.ledger = ledger
+
+    def _call(self, name, *args, **kwargs):
+        with self.ledger.transaction():
+            data = self.ledger.get_record("workflow", "cases") or {}
+            for attr, model in [("_reviews", ReviewCase), ("_gathers", GatherCase),
+                                ("_proposals", PaymentProposal), ("_authorities", AuthorityState)]:
+                setattr(self, attr, {k: model.model_validate(v) for k, v in data.get(attr, {}).items()})
+            result = getattr(super(), name)(*args, **kwargs)
+            self.ledger.put_record("workflow", "cases", {
+                attr: {k: v.model_dump(mode="json") for k, v in getattr(self, attr).items()}
+                for attr in ["_reviews", "_gathers", "_proposals", "_authorities"]
+            })
+            return result
+
+
+def _durable_case_method(name):
+    def call(self, *args, **kwargs):
+        return self._call(name, *args, **kwargs)
+    return call
+
+
+for _name in ("open_review", "open_gather", "get_review", "get_gather", "proposal_for",
+              "authority_for", "mark_review", "mark_gather"):
+    setattr(DurableCaseStore, _name, _durable_case_method(_name))

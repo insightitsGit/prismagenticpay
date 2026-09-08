@@ -5,10 +5,16 @@ services:
       - "8080:8080"
     environment:
       PAP_ENV: production
-      PAP_API_KEYS: ${PAP_API_KEYS:-changeme-set-real-keys}
+      PAP_IDENTITY_REGISTRY_PATH: /config/identities.json
+      PAP_AUTHORITY_REGISTRY_PATH: /config/authority.json
+      PAP_TRUST_REGISTRY_PATH: /config/trust.json
+      PAP_ALLOWED_RAILS: stripe
+      STRIPE_API_KEY: ${STRIPE_API_KEY:?Set the Stripe secret key}
+      PAP_SIGNING_SEED_HEX: ${PAP_SIGNING_SEED_HEX:?Set a 32-byte hex signing seed}
       PAP_DATABASE_URL: sqlite:////data/prismagenticpay.sqlite
     volumes:
       - ledger:/data
+      - ${PAP_CONFIG_DIRECTORY:?Set the server-owned config directory}:/config:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
       interval: 15s

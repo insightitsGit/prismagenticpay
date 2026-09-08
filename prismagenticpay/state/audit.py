@@ -33,3 +33,15 @@ class AuditLog:
             if payment_hash is None:
                 return list(self._events)
             return [e for e in self._events if e.payment_hash == payment_hash]
+
+
+class DurableAuditLog:
+    def __init__(self, ledger):
+        self.ledger = ledger
+
+    def append(self, event):
+        self.ledger.put_record("audit", event.event_id, event.model_dump(mode="json"))
+
+    def list(self, payment_hash=None):
+        events = [AuditEvent.model_validate(item) for item in self.ledger.list_records("audit")]
+        return [event for event in events if payment_hash is None or event.payment_hash == payment_hash]

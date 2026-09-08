@@ -19,6 +19,7 @@ class StripeRailError(ValueError):
 
 class StripeRail:
     rail_id = "stripe"
+    supports_recovery = True
 
     def __init__(
         self,
@@ -45,8 +46,18 @@ class StripeRail:
         decision: AuthorizationDecision,
         amount_cents: int,
         payment_token: str,
+        *, operation_id: str | None = None, capture_reference: str = "",
     ) -> RailResult:
         _reject_pan(payment_token)
+        operation_id = operation_id or decision.authorization_id
+        if capture_reference:
+            existing = self._client.get(f"/v1/payment_intents/{capture_reference}")
+            existing.raise_for_status()
+            body = existing.json()
+            if body.get("status") == "succeeded":
+                if body.get("amount_received") != amount_cents or body.get("currency") != proposal.currency.lower():
+                    raise StripeRailError("captured amount or currency mismatch")
+                return RailResult(ok=True, rail_id=self.rail_id, reference=capture_reference, detail="succeeded")
         created = self._client.post(
             "/v1/payment_intents",
             data={
@@ -58,21 +69,22 @@ class StripeRail:
                 "confirmation_method": "automatic",
                 "metadata[payment_hash]": decision.payment_hash,
                 "metadata[authorization_id]": decision.authorization_id,
-                "idempotency_key": decision.authorization_id,
+                "metadata[operation_id]": operation_id,
             },
-            headers={"Idempotency-Key": f"pi_{decision.authorization_id}"},
+            headers={"Idempotency-Key": f"pi_{operation_id}"},
         )
         body = created.json()
         if created.status_code >= 400:
-            return RailResult(ok=False, rail_id=self.rail_id, reference="", detail=str(body))
+            return RailResult(ok=False, rail_id=self.rail_id, reference="", detail="provider_request_failed")
         intent_id = body["id"]
         captured = self._client.post(
             f"/v1/payment_intents/{intent_id}/capture",
             data={"amount_to_capture": str(amount_cents)},
+            headers={"Idempotency-Key": f"cap_{operation_id}"},
         )
         cap_body = captured.json()
         if captured.status_code >= 400 or cap_body.get("status") != "succeeded":
-            return RailResult(ok=False, rail_id=self.rail_id, reference=intent_id, detail=str(cap_body))
+            return RailResult(ok=False, rail_id=self.rail_id, reference=intent_id, detail="capture_not_confirmed")
         return RailResult(ok=True, rail_id=self.rail_id, reference=intent_id, detail="succeeded")
 
     def refund(
@@ -81,20 +93,54 @@ class StripeRail:
         decision: AuthorizationDecision,
         amount_cents: int,
         capture_reference: str,
+        *, operation_id: str, refund_reference: str = "",
     ) -> RailResult:
+        if refund_reference:
+            existing = self._client.get(f"/v1/refunds/{refund_reference}")
+            existing.raise_for_status()
+            body = existing.json()
+            if body.get("amount") != amount_cents or body.get("payment_intent") != capture_reference:
+                raise StripeRailError("refund binding mismatch")
+            return RailResult(ok=body.get("status") == "succeeded", rail_id=self.rail_id,
+                              reference=refund_reference, detail=body.get("status", "unknown"))
         response = self._client.post(
             "/v1/refunds",
             data={
                 "payment_intent": capture_reference,
+                "metadata[operation_id]": operation_id,
                 "amount": str(amount_cents),
                 "metadata[payment_hash]": decision.payment_hash,
             },
-            headers={"Idempotency-Key": f"re_{decision.authorization_id}_{amount_cents}"},
+            headers={"Idempotency-Key": f"re_{operation_id}"},
         )
         body = response.json()
         if response.status_code >= 400:
-            return RailResult(ok=False, rail_id=self.rail_id, reference=capture_reference, detail=str(body))
-        return RailResult(ok=True, rail_id=self.rail_id, reference=body.get("id", ""), detail=body.get("status", ""))
+            return RailResult(ok=False, rail_id=self.rail_id, reference="", detail="provider_request_failed")
+        return RailResult(ok=body.get("status") == "succeeded", rail_id=self.rail_id, reference=body.get("id", ""), detail=body.get("status", "unknown"))
+
+    def reconcile(self, proposal, decision, amount_cents, *, operation_id, kind, reference, capture_reference=""):
+        import re
+        prefix = "pi" if kind == "capture" else "re"
+        if not re.fullmatch(prefix + r"_[A-Za-z0-9]+", reference):
+            raise StripeRailError("invalid provider reference")
+        resource = "payment_intents" if kind == "capture" else "refunds"
+        response = self._client.get(f"/v1/{resource}/{reference}")
+        response.raise_for_status()
+        body = response.json()
+        metadata = body.get("metadata", {})
+        if (metadata.get("operation_id") != operation_id or metadata.get("payment_hash") != decision.payment_hash
+                or body.get("amount") != amount_cents or body.get("currency") != proposal.currency.lower()):
+            raise StripeRailError("provider evidence does not match operation")
+        if kind == "refund" and body.get("payment_intent") != capture_reference:
+            raise StripeRailError("provider refund does not match capture")
+        status = body.get("status", "unknown")
+        if status == "succeeded":
+            if kind == "capture" and body.get("amount_received") != amount_cents:
+                raise StripeRailError("provider captured amount mismatch")
+            return RailResult(ok=True, rail_id=self.rail_id, reference=reference, detail="succeeded")
+        terminal = status == "canceled" or (kind == "refund" and status == "failed")
+        return RailResult(ok=False, rail_id=self.rail_id, reference=reference,
+                          detail="confirmed_not_paid" if terminal else "provider_still_pending")
 
     def void(self, decision: AuthorizationDecision, capture_reference: Optional[str] = None) -> RailResult:
         if not capture_reference:
@@ -102,11 +148,11 @@ class StripeRail:
         response = self._client.post(f"/v1/payment_intents/{capture_reference}/cancel")
         body = response.json()
         if response.status_code >= 400:
-            return RailResult(ok=False, rail_id=self.rail_id, reference=capture_reference, detail=str(body))
+            return RailResult(ok=False, rail_id=self.rail_id, reference="", detail="provider_request_failed")
         return RailResult(ok=True, rail_id=self.rail_id, reference=capture_reference, detail=body.get("status", ""))
 
 
 def _reject_pan(token: str) -> None:
-    digits = "".join(ch for ch in token if ch.isdigit())
-    if token.isdigit() and 13 <= len(digits) <= 19:
-        raise StripeRailError("raw PAN is not permitted; pass a Stripe payment_method token")
+    import re
+    if not re.fullmatch(r"pm_[A-Za-z0-9_]+", token):
+        raise StripeRailError("only Stripe payment_method tokens are permitted")

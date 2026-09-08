@@ -17,7 +17,7 @@ class FactMeta(BaseModel):
     def is_fresh(self, now: datetime) -> bool:
         if self.ttl_seconds < 0:
             return False
-        return (now - self.fetched_at).total_seconds() <= self.ttl_seconds
+        return 0 <= (now - self.fetched_at).total_seconds() < self.ttl_seconds
 
 
 class FactTtlValidator:

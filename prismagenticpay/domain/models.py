@@ -75,6 +75,7 @@ class PaymentProposal(BaseModel):
     mandate_type: str  # "closed_checkout" or "closed_payment"
     mandate_hash: str
 
+    mandate_expires_at: Optional[datetime] = None
     requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     idempotency_nonce: str
 
@@ -131,6 +132,8 @@ class PaymentProposal(BaseModel):
             "agent_id": self.agent_id,
             "principal_id": self.principal_id,
             "mandate_hash": self.mandate_hash,
+            "mandate_id": self.mandate_id,
+            "mandate_expires_at": self.mandate_expires_at.isoformat() if self.mandate_expires_at else None,
             "nonce": self.idempotency_nonce,
         }
         return hashlib.sha256(
@@ -220,19 +223,7 @@ class AuthorizationDecision(BaseModel):
         return normalized
 
     def canonical_bytes(self) -> bytes:
-        payload = {
-            "authorization_id": self.authorization_id,
-            "status": self.status.value,
-            "reasoning_directive": self.reasoning_directive,
-            "reservation_id": self.reservation_id,
-            "created_at": self.created_at.astimezone(timezone.utc).isoformat(),
-            "expires_at": self.expires_at.astimezone(timezone.utc).isoformat(),
-            "payment_hash": self.payment_hash,
-            "authority_snapshot_hash": self.authority_snapshot_hash,
-            "mandate_hash": self.mandate_hash,
-            "policy_version": self.policy_version,
-            "issuer_id": self.issuer_id,
-        }
+        payload = self.model_dump(mode="json", exclude={"signature"})
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     def is_valid_for_settlement(
@@ -246,7 +237,7 @@ class AuthorizationDecision(BaseModel):
         check_time = now or datetime.now(timezone.utc)
         if self.status != PaymentAuthStatus.AUTHORIZED:
             return False
-        if check_time >= self.expires_at:
+        if check_time < self.created_at or check_time >= self.expires_at:
             return False
         if actual_payment_hash != self.payment_hash:
             return False

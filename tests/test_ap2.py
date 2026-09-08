@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import fresh_metadata
+
 import base64
 import hashlib
 import json
@@ -146,7 +148,7 @@ def test_verified_mandate_can_authorize_and_settle(authorizer, gateway, authorit
         checkout_public_key=checkout_key.public_key(),
     )
     proposal = adapter.verify_and_project(payment_jwt, checkout_jwt, now=frozen_now)
-    decision = authorizer.process_authorization(proposal, authority, now=frozen_now)
+    decision = authorizer.process_authorization(proposal, authority, now=frozen_now, fact_metadata=fresh_metadata(frozen_now),)
     assert decision.status.value == "AUTHORIZED"
     assert gateway.settle_transaction(
         decision, proposal.compute_canonical_payment_hash(), now=frozen_now
@@ -235,3 +237,21 @@ def test_sd_jwt_disclosure_is_required_and_bound():
     adapter = AP2IngressAdapter(payment_public_key=key.public_key())
     verified = adapter.verify(token, checkout, now=now)
     assert verified.category == "software"
+
+
+@pytest.mark.parametrize("attack", ["duplicate", "collision", "algorithm"])
+def test_sd_jwt_rejects_ambiguous_disclosures(attack):
+    now = datetime(2026, 9, 8, 19, 30, tzinfo=timezone.utc)
+    key = _es256_key()
+    checkout = _sign(key, {"exp": int(now.timestamp()) + 60})
+    disclosure = _b64url(json.dumps(["salt", "category", "software"]).encode())
+    digest = _b64url(hashlib.sha256(disclosure.encode()).digest())
+    claims = _base_claims(now, checkout)
+    if attack != "collision": del claims["category"]
+    claims["_sd"] = [digest]
+    if attack == "algorithm": claims["_sd_alg"] = "sha-512"
+    issuer = _sign(key, claims)
+    token = issuer + "~" + disclosure + "~"
+    if attack == "duplicate": token += disclosure + "~"
+    with pytest.raises(AP2VerificationError):
+        AP2IngressAdapter(payment_public_key=key.public_key()).verify(token, checkout, now=now)

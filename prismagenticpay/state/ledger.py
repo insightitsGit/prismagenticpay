@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
+from copy import deepcopy
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -13,6 +15,7 @@ from pydantic import BaseModel
 
 class HoldStatus(str, Enum):
     PENDING = "pending"
+    PROCESSING = "processing"
     SETTLED = "settled"
     RELEASED = "released"
     EXPIRED = "expired"
@@ -53,7 +56,8 @@ class AtomicAuthorityLedger:
         if default_hold_ttl_seconds <= 0:
             raise ValueError("default_hold_ttl_seconds must be positive")
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._records = {}
         self._session_budget_cents = session_budget_cents
         self._daily_budget_cents = daily_budget_cents
         self._mandate_budget_cents = mandate_budget_cents
@@ -77,7 +81,7 @@ class AtomicAuthorityLedger:
         return sum(
             r.amount_cents
             for r in self._reservations.values()
-            if r.status == HoldStatus.PENDING and predicate(r)
+            if r.status in {HoldStatus.PENDING, HoldStatus.PROCESSING} and predicate(r)
         )
 
     def _availability(
@@ -147,7 +151,7 @@ class AtomicAuthorityLedger:
                 prior = self._reservations[res_id]
                 if prior.status == HoldStatus.SETTLED:
                     return False, res_id, prior, "REPLAY_REJECTED: Transaction already settled."
-                if prior.status == HoldStatus.PENDING:
+                if prior.status in {HoldStatus.PENDING, HoldStatus.PROCESSING}:
                     return True, res_id, prior, "IDEMPOTENT_IN_FLIGHT: Active hold exists."
                 if prior.status is HoldStatus.GATHERED:
                     pass
@@ -312,7 +316,8 @@ class AtomicAuthorityLedger:
 
     def get(self, reservation_id: str) -> Optional[MultiBucketReservation]:
         with self._lock:
-            return self._reservations.get(reservation_id)
+            res = self._reservations.get(reservation_id)
+            return res.model_copy(deep=True) if res else None
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -320,6 +325,7 @@ class AtomicAuthorityLedger:
 
     def load_snapshot(self, data: Dict[str, Any]) -> None:
         with self._lock:
+            self._records = deepcopy(data.get("records", {}))
             self._settled_cents = int(data.get("settled_cents", 0))
             self._session_settled = {k: int(v) for k, v in data.get("session_settled", {}).items()}
             self._daily_settled = {k: int(v) for k, v in data.get("daily_settled", {}).items()}
@@ -332,6 +338,7 @@ class AtomicAuthorityLedger:
 
     def _snapshot_unlocked(self) -> Dict[str, Any]:
         return {
+            "records": deepcopy(self._records),
             "settled_cents": self._settled_cents,
             "session_settled": dict(self._session_settled),
             "daily_settled": dict(self._daily_settled),
@@ -343,3 +350,52 @@ class AtomicAuthorityLedger:
     def _emit(self) -> None:
         if self._on_mutate is not None:
             self._on_mutate(self._snapshot_unlocked())
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            before = self.snapshot()
+            try:
+                yield self
+            except BaseException:
+                self.load_snapshot(before)
+                raise
+
+    def get_record(self, kind, key):
+        with self._lock:
+            return deepcopy(self._records.get(kind, {}).get(key))
+
+    def put_record(self, kind, key, value):
+        with self._lock:
+            self._records.setdefault(kind, {})[key] = deepcopy(value)
+            self._emit()
+
+    def list_records(self, kind):
+        with self._lock:
+            return deepcopy(list(self._records.get(kind, {}).values()))
+
+    def start_capture(self, reservation_id, now):
+        with self._lock:
+            res = self._reservations.get(reservation_id)
+            if not res or res.status is not HoldStatus.PENDING or now >= res.expires_at:
+                raise ValueError("capture hold is not live")
+            res.status = HoldStatus.PROCESSING
+            self._emit()
+
+    def complete_capture(self, reservation_id, amount_cents):
+        with self._lock:
+            res = self._reservations.get(reservation_id)
+            if not res or res.status is not HoldStatus.PROCESSING or not 0 < amount_cents <= res.amount_cents:
+                raise ValueError("capture operation does not match hold")
+            return self._settle_unlocked(res, amount_cents)
+
+    def readiness(self):
+        return True
+
+    def cancel_capture(self, reservation_id):
+        with self._lock:
+            res = self._reservations.get(reservation_id)
+            if not res or res.status is not HoldStatus.PROCESSING:
+                raise ValueError("capture is not processing")
+            res.status = HoldStatus.RELEASED
+            self._emit()

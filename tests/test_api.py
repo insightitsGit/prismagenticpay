@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from conftest import fresh_metadata
 from fastapi.testclient import TestClient
 
 from prismagenticpay.api.app import create_app
@@ -13,6 +14,7 @@ def test_http_authorize_and_settle(authorizer, gateway, proposal, authority):
         json={
             "proposal": proposal.model_dump(mode="json"),
             "authority": authority.model_dump(mode="json"),
+            "fact_metadata": {k: v.model_dump(mode="json") for k, v in fresh_metadata().items()},
         },
     )
     assert response.status_code == 200
