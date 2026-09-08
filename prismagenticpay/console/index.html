@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PrismAgenticPay Console</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1419; --card: #1a222c; --line: #2b3642; --text: #e8eef4; --muted: #93a1b0; --ok: #3dd68c; --bad: #ff6b6b; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    header, main { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
+    h1 { font-size: 1.15rem; margin: 0; }
+    .row { display: flex; gap: .5rem; align-items: center; }
+    input, textarea, button, select { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: .5rem .7rem; }
+    button { cursor: pointer; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; margin: 1rem 0; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { text-align: left; padding: .45rem .3rem; border-bottom: 1px solid var(--line); }
+    .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+    textarea { width: 100%; min-height: 140px; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PrismAgenticPay Console</h1>
+    <div class="row">
+      <input id="apiKey" placeholder="X-API-Key" />
+      <button id="reload">Reload</button>
+      <span id="health" class="muted">checking…</span>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Audit</h2>
+      <table>
+        <thead><tr><th>Time/ID</th><th>Type</th><th>Actor</th><th>Detail</th></tr></thead>
+        <tbody id="audit"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Policies</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Modality</th><th>Predicate</th><th>Severity</th></tr></thead>
+        <tbody id="policies"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Simulate</h2>
+      <textarea id="simulateBody"></textarea>
+      <p><button id="simulate">Run simulation</button></p>
+      <pre id="simulateOut" class="muted"></pre>
+    </section>
+  </main>
+  <script>
+    const sample = {
+      proposal: {
+        transaction_id: "tx_console",
+        amount_cents: 2500,
+        currency: "USD",
+        merchant: { merchant_id: "merch_cloud", merchant_name: "Example Cloud", mcc: "5734", domain: "cloud.example" },
+        category: "software",
+        agent_id: "agent_shopper",
+        principal_id: "principal_42",
+        mandate_id: "mandate_42",
+        mandate_type: "closed_payment",
+        mandate_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        idempotency_nonce: "nonce_console"
+      },
+      authority: {
+        transaction_cap_cents: 10000,
+        session_remaining_cents: 10000,
+        daily_remaining_cents: 20000,
+        mandate_remaining_cents: 15000,
+        vendor_status: "approved",
+        tier: "standard",
+        requires_dual_signature: false
+      }
+    };
+    document.getElementById("simulateBody").value = JSON.stringify(sample, null, 2);
+
+    function headers() {
+      const key = document.getElementById("apiKey").value.trim();
+      const h = { "Content-Type": "application/json" };
+      if (key) h["X-API-Key"] = key;
+      return h;
+    }
+
+    async function load() {
+      const health = await fetch("/healthz").then(r => r.json());
+      document.getElementById("health").textContent = health.status === "ok" ? "healthy" : "down";
+      document.getElementById("health").className = health.status === "ok" ? "ok" : "bad";
+      const audit = await fetch("/v1/audit", { headers: headers() }).then(r => r.ok ? r.json() : []);
+      document.getElementById("audit").innerHTML = audit.map(e =>
+        `<tr><td>${e.event_id}</td><td>${e.event_type}</td><td>${e.actor_id}</td><td>${e.detail}</td></tr>`
+      ).join("") || `<tr><td colspan="4" class="muted">No events</td></tr>`;
+      const policies = await fetch("/v1/policies", { headers: headers() }).then(r => r.ok ? r.json() : []);
+      document.getElementById("policies").innerHTML = policies.map(p =>
+        `<tr><td>${p.id}</td><td>${p.modality}</td><td>${p.predicate}</td><td>${p.severity}</td></tr>`
+      ).join("");
+    }
+
+    document.getElementById("reload").onclick = load;
+    document.getElementById("simulate").onclick = async () => {
+      const body = JSON.parse(document.getElementById("simulateBody").value);
+      const res = await fetch("/v1/policies/simulate", { method: "POST", headers: headers(), body: JSON.stringify(body) });
+      document.getElementById("simulateOut").textContent = JSON.stringify(await res.json(), null, 2);
+    };
+    load();
+  </script>
+</body>
+</html>

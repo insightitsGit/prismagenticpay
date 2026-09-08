@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Version** | 1.2.0 |
+| **Version** | 1.3.0 |
 | **Status** | Frozen kernel |
 | **Core Engine** | PrismThinker contract via `to_chorusgraph()` |
 | **Primary Ingress** | AP2 v0.2 closed payment mandate (JWS or SD-JWT) |
@@ -65,10 +65,15 @@ Not implemented (and not claimed as done):
 |---|---|---|
 | POST | `/v1/authorize` | Proposal + authority → decision |
 | POST | `/v1/settle` | Signed decision + payment hash → commit |
+| POST | `/v1/capture` | Rail capture then ledger capture + receipt |
+| POST | `/v1/refund` | Rail refund then ledger refund |
 | POST | `/v1/reviews/{id}/approve` | Second approver, must not be principal or agent |
 | POST | `/v1/reviews/{id}/deny` | Release hold |
 | POST | `/v1/gathers/{id}/resume` | Re-authorize after fresh facts |
 | GET | `/v1/audit` | Append-only event log |
+| GET/POST/DELETE | `/v1/policies` | Policy studio |
+| POST | `/v1/policies/simulate` | Dry-run PrismThinker |
+| GET | `/console` | Operator console |
 
 ## Threat model
 

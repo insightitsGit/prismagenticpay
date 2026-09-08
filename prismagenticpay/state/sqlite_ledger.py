@@ -68,3 +68,9 @@ class SqliteAuthorityLedger:
 
     def get(self, reservation_id: str) -> Optional[MultiBucketReservation]:
         return self._mem.get(reservation_id)
+
+    def capture(self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None) -> Tuple[bool, str]:
+        return self._mem.capture(reservation_id, amount_cents, now=now)
+
+    def refund(self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None) -> Tuple[bool, str]:
+        return self._mem.refund(reservation_id, amount_cents, now=now)

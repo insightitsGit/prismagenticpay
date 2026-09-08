@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismagenticpay"
-version = "1.2.0"
+version = "1.3.0"
 description = "Deterministic policy-authority kernel for autonomous agent payments."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,9 @@ api = ["fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 include = ["prismagenticpay*"]
+
+[tool.setuptools.package-data]
+prismagenticpay = ["console/index.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

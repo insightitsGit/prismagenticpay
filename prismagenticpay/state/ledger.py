@@ -30,6 +30,8 @@ class MultiBucketReservation(BaseModel):
     principal_id: str
     mandate_id: str
     day: str
+    captured_cents: int = 0
+    refunded_cents: int = 0
 
 
 class BucketAvailability(BaseModel):
@@ -212,18 +214,73 @@ class AtomicAuthorityLedger:
             if res.status != HoldStatus.PENDING:
                 return False, f"CANNOT_COMMIT: Hold is in status {res.status.value}"
 
-            res.status = HoldStatus.SETTLED
-            self._settled_cents += res.amount_cents
+            return self._settle_unlocked(res, res.amount_cents)
+
+    def capture(
+        self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None
+    ) -> Tuple[bool, str]:
+        if amount_cents <= 0:
+            return False, "INVALID_CAPTURE_AMOUNT"
+        current_time = now or datetime.now(timezone.utc)
+        with self._lock:
+            self._sweep_expired_holds(current_time)
+            res = self._reservations.get(reservation_id)
+            if not res:
+                return False, "RESERVATION_NOT_FOUND"
+            if res.status != HoldStatus.PENDING:
+                return False, f"CANNOT_CAPTURE: Hold is in status {res.status.value}"
+            if current_time >= res.expires_at:
+                res.status = HoldStatus.EXPIRED
+                self._emit()
+                return False, "HOLD_EXPIRED"
+            if amount_cents > res.amount_cents:
+                return False, "CAPTURE_EXCEEDS_HOLD"
+            res.amount_cents = amount_cents
+            return self._settle_unlocked(res, amount_cents)
+
+    def refund(
+        self, reservation_id: str, amount_cents: int, now: Optional[datetime] = None
+    ) -> Tuple[bool, str]:
+        if amount_cents <= 0:
+            return False, "INVALID_REFUND_AMOUNT"
+        current_time = now or datetime.now(timezone.utc)
+        with self._lock:
+            self._sweep_expired_holds(current_time)
+            res = self._reservations.get(reservation_id)
+            if not res:
+                return False, "RESERVATION_NOT_FOUND"
+            if res.status != HoldStatus.SETTLED:
+                return False, f"CANNOT_REFUND: Hold is in status {res.status.value}"
+            refundable = res.captured_cents - res.refunded_cents
+            if amount_cents > refundable:
+                return False, f"REFUND_EXCEEDS_CAPTURED: refundable {refundable}c"
+            res.refunded_cents += amount_cents
+            self._settled_cents -= amount_cents
             self._session_settled[res.session_id] = (
-                self._session_settled.get(res.session_id, 0) + res.amount_cents
+                self._session_settled.get(res.session_id, 0) - amount_cents
             )
             daily_key = f"{res.principal_id}:{res.day}"
-            self._daily_settled[daily_key] = self._daily_settled.get(daily_key, 0) + res.amount_cents
+            self._daily_settled[daily_key] = self._daily_settled.get(daily_key, 0) - amount_cents
             self._mandate_settled[res.mandate_id] = (
-                self._mandate_settled.get(res.mandate_id, 0) + res.amount_cents
+                self._mandate_settled.get(res.mandate_id, 0) - amount_cents
             )
             self._emit()
-            return True, "SETTLED"
+            return True, "REFUNDED"
+
+    def _settle_unlocked(self, res: MultiBucketReservation, amount_cents: int) -> Tuple[bool, str]:
+        res.status = HoldStatus.SETTLED
+        res.captured_cents = amount_cents
+        self._settled_cents += amount_cents
+        self._session_settled[res.session_id] = (
+            self._session_settled.get(res.session_id, 0) + amount_cents
+        )
+        daily_key = f"{res.principal_id}:{res.day}"
+        self._daily_settled[daily_key] = self._daily_settled.get(daily_key, 0) + amount_cents
+        self._mandate_settled[res.mandate_id] = (
+            self._mandate_settled.get(res.mandate_id, 0) + amount_cents
+        )
+        self._emit()
+        return True, "SETTLED"
 
     def release(self, reservation_id: str, *, gathered: bool = False) -> bool:
         with self._lock:
