@@ -2,13 +2,15 @@
 
 **Give AI agents a defined spending authority, an approval workflow, and a recoverable payment lifecycle.**
 
-PrismAgenticPay is a Python policy-authority service for **agentic payments**. It verifies signed AP2 payment mandates, evaluates enterprise spending rules with PrismThinker, reserves budget, and issues signed authorization decisions before a supported payment provider can capture funds.
+PrismAgenticPay is a Python policy-authority **library and optional HTTP service** for **agentic payments**. It verifies signed AP2 payment mandates, evaluates enterprise spending rules with PrismThinker, reserves budget, and issues signed authorization decisions before a supported payment provider can capture funds.
+
+It does not move money by itself, store card numbers, or ship provider credentials. Integrators supply Stripe and signing secrets at runtime.
 
 Built for teams developing autonomous purchasing agents, procurement workflows, and AI applications that need auditable control over spending.
 
-**Author: Amin Parva** · **Version: 1.4.1** · **Python: 3.11+** · **License: MIT**
+**Author: Amin Parva** · **Version: 1.4.1** · **Python: 3.11–3.14** · **License: MIT**
 
-[Quick start](#quick-start) · [Architecture](#how-agent-payment-authorization-works) · [HTTP API](#http-api) · [Testing](#testing-and-validation) · [Deployment guide](docs/PRODUCTION.md)
+[Quick start](#quick-start) · [Architecture](#how-agent-payment-authorization-works) · [HTTP API](#http-api) · [Testing](#testing-and-validation) · [Release status](#release-status) · [Deployment guide](docs/PRODUCTION.md)
 
 ## The problem: an agent can request a payment before it has the authority to spend
 
@@ -35,7 +37,7 @@ Authority grants are loaded on the server. A purchasing client cannot supply its
 
 ### Apply policy to fresh enterprise facts
 
-PrismThinker evaluates corporate policy, and `to_chorusgraph()` supplies the execution directive. Source timestamps and TTLs determine whether facts can participate in the decision. Missing, stale, or future-dated metadata causes facts to be withheld.
+PrismThinker 1.2+ evaluates corporate policy, and `to_chorusgraph()` supplies the execution directive (`execute`, `refuse`, `escalate`, `gather`). An `answer` directive fail-closes to `REFUSE`. Source timestamps and TTLs determine whether facts can participate in the decision. Missing, stale, untracked, or future-dated metadata causes facts to be withheld.
 
 Reference policies cover vendor standing, per-transaction limits, session budgets, principal-day budgets, mandate budgets, and dual approval. SAP, NetSuite, and Coupa HTTP adapters can supply vendor facts when configured; their field mappings require validation against the target tenant.
 
@@ -78,14 +80,14 @@ The local integration scenario models a **$25 software purchase** that requires 
 2. A capture attempt is blocked, and the purchasing identity cannot impersonate the reviewer.
 3. A distinct authenticated controller approves the purchase.
 4. The merchant captures **$20**, and the service issues a signed receipt for that amount.
-5. A **$5 refund** leaves **$15 net spend** in the ledger.
+5. A **$5 refund** leaves **$15 net spend** in the ledger (`$100.00` session budget becomes `$85.00` remaining).
 6. After the application restarts, refund replay, audit history, balances, and receipt verification remain consistent.
 
-This scenario uses real HTTP, cryptographic signatures, PrismThinker, and SQLite with a simulated payment provider. A separate opt-in test exercises Stripe's actual sandbox API.
+This scenario uses real HTTP, cryptographic signatures, PrismThinker, and SQLite with a **simulated** payment provider. It does not need company credentials or move money. A separate opt-in test exercises Stripe's actual sandbox API.
 
 ## Quick start
 
-Clone the repository and create an isolated environment. Python 3.12 was used for the recorded validation.
+Clone the repository and create an isolated environment. Recorded validation used **Python 3.12.10**.
 
 ```bash
 git clone https://github.com/insightitsGit/prismagenticpay.git
@@ -119,7 +121,21 @@ Run the complete local HTTP purchase scenario:
 python -m pytest tests/test_local_scenario.py -v
 ```
 
-The scenario creates temporary registries, keys, a database, and loopback HTTP servers. It does not need company credentials or move money. See [local testing instructions](docs/LOCAL_TESTING.md) for sandboxed filesystem environments and the real Stripe sandbox test.
+The scenario creates temporary registries, keys, a database, and loopback HTTP servers. See [local testing instructions](docs/LOCAL_TESTING.md) for sandboxed filesystem environments and the real Stripe sandbox test.
+
+Install the published library:
+
+```bash
+python -m pip install "prismagenticpay==1.4.1"
+```
+
+For the HTTP service extras:
+
+```bash
+python -m pip install "prismagenticpay[api]==1.4.1"
+```
+
+The project page is [prismagenticpay 1.4.1 on PyPI](https://pypi.org/project/prismagenticpay/1.4.1/).
 
 ## Run the payment-authority service
 
@@ -139,8 +155,9 @@ Production configuration includes:
 - `PAP_TRUST_REGISTRY_PATH`
 - `PAP_ALLOWED_RAILS=stripe`
 - `STRIPE_API_KEY`
+- `STRIPE_RETURN_URL` (optional application-owned HTTP(S) return endpoint)
 
-Keep secrets on the server. Use sandbox credentials for integration testing. The deployment guide includes registry formats, identity roles, recovery procedures, Docker Compose configuration, and upgrade requirements.
+Keep secrets on the server. They are read from the process environment; the package ships empty defaults and does not embed API keys, PyPI tokens, or signing seeds. `Settings` omits secret fields from `repr()`. Use sandbox credentials for integration testing. The deployment guide includes registry formats, identity roles, recovery procedures, Docker Compose configuration, and upgrade requirements.
 
 ## HTTP API
 
@@ -155,25 +172,28 @@ The FastAPI service exposes these primary operations:
 - `POST /v1/operations/{operation_id}/retry` or `/reconcile` — recover an interrupted operation.
 - `GET /v1/audit` — retrieve recorded workflow events.
 - `/v1/policies` and `/v1/policies/simulate` — manage and evaluate policy rules.
+- `GET /v1/trust` — list configured trust-registry issuers.
 - `GET /healthz`, `/readyz`, and `/console` — liveness, storage readiness, and the operator console.
 
 Production uses named API identities with explicit roles. The raw `/v1/authorize` and `/v1/settle` routes are development harnesses and return `403` in production. Request schemas are available through FastAPI's `/docs` endpoint when the service is running.
 
 ## Testing and validation
 
-The recorded local validation result is **93 passed, 1 skipped**. The skipped test requires an explicit Stripe sandbox opt-in and a test key.
+Recorded local validation on **2026-09-08** with **Python 3.12.10**: **104 passed, 1 skipped**, in 36 seconds. The skipped test is `tests/test_stripe_sandbox.py` and requires `PAP_RUN_STRIPE_SANDBOX=1` plus an `sk_test_` key. It is operator evidence, not a library publish gate.
 
-Coverage includes authorization boundaries, budget contention, fact freshness, dual approval, signature tampering, partial capture, refund idempotency, SQLite concurrency, durable audit history, and restart recovery. Fault-injection tests cover a lost response after provider payment and a database failure after provider success.
+If `dist/` is absent, the release-artifact hygiene check is skipped as well (103 passed, 2 skipped). After `python -m build`, that check runs and confirms the wheel and sdist contain no embedded secrets, `.env` files, company handoff notes, or operator credential scripts.
 
-Read the [implementation audit](docs/IMPLEMENTATION_AUDIT.md) for the evidence and remaining release checks. Passing local tests is not a certification of a company's provider account, ERP configuration, or deployed infrastructure.
+Coverage includes authorization boundaries, budget contention, fact freshness, dual approval, signature tampering, partial capture, refund idempotency, SQLite concurrency, durable audit history, restart recovery, and release hygiene. Fault-injection tests cover a lost response after provider payment and a database failure after provider success.
+
+Read the [implementation audit](docs/IMPLEMENTATION_AUDIT.md) for evidence and remaining operator work. Passing local tests is not a certification of a company's provider account, ERP configuration, or deployed infrastructure.
 
 ## Supported scope and current limits
 
-Version 1.4.0 supports a **single configured accounting currency with Stripe settlement**. Coinbase/ISO settlement and caller-supplied FX are disabled in the production runtime. Full SD-JWT-VC ecosystem interoperability and multi-region operation are outside the supported scope.
+Version **1.4.1** supports a **single configured accounting currency with Stripe settlement**. Confirmation is **card-only**. Coinbase/ISO settlement and caller-supplied FX are disabled in the production runtime. Full SD-JWT-VC ecosystem interoperability and multi-region operation are outside the supported scope.
 
 SQLite stores complete workflow snapshots, so write cost grows with history. Validate throughput, backups, recovery monitoring, TLS, identity provisioning, and ERP mappings for your deployment. Old unknown provider operations require reconciliation; automated retries stop after 23 hours.
 
-Before enabling real-money traffic, complete the real Stripe sandbox test and deployment acceptance. Upgrading from 1.3 also requires reviewing the changed payment hashes, signature format, and API trust boundary.
+Before enabling real-money traffic, complete deployment acceptance with the integrator's own Stripe account. Upgrading from 1.3 also requires reviewing the changed payment hashes, signature format, and API trust boundary.
 
 ## Documentation
 
@@ -182,7 +202,8 @@ Before enabling real-money traffic, complete the real Stripe sandbox test and de
 - [Production configuration and recovery](docs/PRODUCTION.md)
 - [Unit, local integration, and Stripe sandbox testing](docs/LOCAL_TESTING.md)
 - [Implementation audit and remediation](docs/IMPLEMENTATION_AUDIT.md)
-- [Company integration and return handoff](docs/COMPANY_STRIPE_HANDOFF.md)
+- [Publishing checks](docs/RELEASING.md)
+- [Release notes](CHANGELOG.md)
 
 ## Author
 
@@ -190,7 +211,18 @@ Before enabling real-money traffic, complete the real Stripe sandbox test and de
 
 PrismAgenticPay is licensed under the MIT license, as declared in its [package metadata](pyproject.toml).
 
-
 ## Release status
 
-Experimental library; single-host SQLite persistence. Stripe confirmation is card-only. Configure an application-owned return endpoint with STRIPE_RETURN_URL. Customer authentication challenges require integration work. See [release notes](CHANGELOG.md) and [publishing checks](docs/RELEASING.md).
+**1.4.1 is published** at [pypi.org/project/prismagenticpay/1.4.1](https://pypi.org/project/prismagenticpay/1.4.1/). Publishing the package does not deploy a company website.
+
+| Check | Result |
+|---|---|
+| Local pytest (Python 3.12.10) | 104 passed, 1 skipped (Stripe sandbox opt-in) |
+| `python -m build` | `prismagenticpay-1.4.1-py3-none-any.whl`, `prismagenticpay-1.4.1.tar.gz` |
+| `twine check --strict` | PASSED |
+| Secret/artifact scan | No keys, tokens, `.env`, or company handoff files in the artifacts |
+| Wheel SHA-256 | `1de73d808bfa89ebbc1175d32f1feaae7e0bc08dae574385385ef194ce1e29ee` (matches PyPI) |
+| Sdist SHA-256 | `6d0ad7e43f14e54fb356eca607262fc42a8ff224648e4ae7a52068353327b49f` (matches PyPI) |
+| PyPI | Live; owner `Insightits`; uploaded 2026-09-09 |
+
+Stripe confirmation is card-only. Configure an application-owned return endpoint with `STRIPE_RETURN_URL`. Customer authentication challenges require integration work. SQLite persistence is single-host. See [release notes](CHANGELOG.md) and [publishing checks](docs/RELEASING.md).

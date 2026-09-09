@@ -1,5 +1,12 @@
 include LICENSE CHANGELOG.md requirements-tested.txt
 recursive-include docs *.md
-exclude docs/COMPANY_STRIPE_HANDOFF.md docs/COMPANY_STRIPE_RETURN_REVIEW.md
+exclude docs/COMPANY_STRIPE_HANDOFF.md
+exclude docs/COMPANY_STRIPE_RETURN_REVIEW.md
 recursive-include tests *.py
-global-exclude *.sqlite *.db *.pyc
+recursive-exclude scripts *
+recursive-exclude .github *
+global-exclude *.sqlite *.db *.pyc .env .env.* *.pem *.key
+prune .venv
+prune venv
+prune dist
+prune build

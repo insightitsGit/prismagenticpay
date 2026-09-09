@@ -1,0 +1,27 @@
+name: Stripe sandbox
+on:
+  workflow_dispatch:
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    environment: stripe-sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Run library Stripe sandbox test
+        env:
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          PAP_RUN_STRIPE_SANDBOX: "1"
+        run: |
+          python - <<'PY'
+          import os, sys
+          key = os.environ.get("STRIPE_API_KEY", "")
+          if not key:
+              sys.exit("STRIPE_API_KEY is not set on the stripe-sandbox environment")
+          if not key.startswith("sk_test_"):
+              sys.exit("Only an sk_test_ sandbox key is permitted")
+          PY
+          python -m pytest tests/test_stripe_sandbox.py -v

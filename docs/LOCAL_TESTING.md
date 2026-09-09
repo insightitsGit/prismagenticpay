@@ -31,7 +31,7 @@ $testRunPath = ".test-runs/run-" + [guid]::NewGuid().ToString("N")
 .\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp=$testRunPath
 ```
 
-The environment used for this audit has no `python` executable on PATH. The existing `.venv\Scripts\python.exe` works directly; initial setup used the desktop app's bundled Python runtime.
+Recorded validation used Python 3.12.10 from PATH (`python -m pytest -q`). `.venv\Scripts\python.exe` is equivalent after the venv is created.
 
 Passing tests do not mean all production requirements are complete. Read `IMPLEMENTATION_AUDIT.md` for remaining blockers and the exact boundaries of the scenario.
 

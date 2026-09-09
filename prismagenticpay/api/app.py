@@ -18,6 +18,7 @@ from prismagenticpay.api.auth import ApiKeyGate, IdentityGate, Identity
 from prismagenticpay.adapters.ap2 import AP2IngressAdapter
 from prismagenticpay.connectors.base import FactMeta
 from prismagenticpay.api.rate_limit import SlidingWindowLimiter
+from prismagenticpay import __version__
 from prismagenticpay.config import Settings
 from prismagenticpay.core.authorizer import PrismPaymentAuthorizer
 from prismagenticpay.core.settlement import SettlementGatewayHarness
@@ -136,7 +137,7 @@ def create_app(
         if proposal.currency != settings.home_currency:
             raise HTTPException(422, "cross-currency settlement is disabled")
 
-    app = FastAPI(title=settings.app_name, version="1.4.0")
+    app = FastAPI(title=settings.app_name, version=__version__)
     app.state.authorizer = authorizer
     app.state.orchestrator = orchestrator
     app.state.limiter = SlidingWindowLimiter(settings.rate_limit_per_minute)

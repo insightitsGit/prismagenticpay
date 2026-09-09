@@ -1,4 +1,4 @@
-# Implementation audit and remediation ó 2026-09-08
+# Implementation audit and remediation ù 2026-09-08
 
 ## Current result
 
@@ -20,7 +20,7 @@ The audit covered design/specification/operations documents, runtime and API wir
 
 ## Tests
 
-Final local result: **93 passed, 1 skipped**, in 27.66 seconds. The skipped test is the opt-in Stripe sandbox contract test. Two upstream FastAPI/Starlette deprecation warnings remain. Python compilation and `git diff --check` also passed.
+Final local result on 2026-09-08 with Python 3.12.10 and built `dist/` artifacts: **104 passed, 1 skipped**, in 36 seconds. The skipped test is the opt-in Stripe sandbox contract test. Two upstream FastAPI/Starlette deprecation warnings remain. Without `dist/`, the release-artifact hygiene check is also skipped (103 passed, 2 skipped).
 
 `test_local_scenario.py` runs the production factory and a provider simulator over real loopback HTTP. It verifies signed AP2 ingress, raw-route rejection, review role enforcement, self-approval rejection, partial capture, receipt amount/signature, refund constraints, audit history, and repeat-refund/receipt verification after rebuilding the application with the same SQLite database.
 
@@ -28,7 +28,7 @@ Final local result: **93 passed, 1 skipped**, in 27.66 seconds. The skipped test
 
 `test_production_boundaries.py` checks input trust, server fact refresh, mandate expiry, policy roles/persistence, readiness failures, disabled rails, refund pending status and mismatched provider evidence. Existing budget, TTL, policy veto, AP2 and API tests remain active. Existing tests now supply explicit test-source metadata where they intend fresh facts.
 
-`test_stripe_sandbox.py` is opt-in and refuses any key without the `sk_test_` prefix. It performs a real sandbox capture, refund and provider-evidence lookup when enabled. It has not been executed in this session.
+`test_stripe_sandbox.py` is opt-in and refuses any key without the `sk_test_` prefix. It performs a real sandbox capture, refund and provider-evidence lookup when enabled. It is operator evidence, not a library publish gate.
 
 ## Remaining release work
 

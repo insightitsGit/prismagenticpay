@@ -24,31 +24,31 @@ class Settings(BaseModel):
     mandate_budget_cents: int = 2_000_000
     hold_ttl_seconds: int = 120
 
-    api_keys: List[str] = Field(default_factory=list)
+    api_keys: List[str] = Field(default_factory=list, repr=False)
     allowed_rails: List[str] = Field(default_factory=lambda: ["stripe"])
     rate_limit_per_minute: int = 120
 
     database_url: str = "sqlite:///./prismagenticpay.sqlite"
     redis_url: str = ""
 
-    stripe_api_key: str = ""
+    stripe_api_key: str = Field(default="", repr=False)
     stripe_api_base: str = "https://api.stripe.com"
     stripe_return_url: str = ""
-    coinbase_api_key: str = ""
+    coinbase_api_key: str = Field(default="", repr=False)
     coinbase_api_base: str = "https://api.commerce.coinbase.com"
     iso8583_host: str = ""
 
     sap_base_url: str = ""
-    sap_token: str = ""
+    sap_token: str = Field(default="", repr=False)
     netsuite_base_url: str = ""
-    netsuite_token: str = ""
+    netsuite_token: str = Field(default="", repr=False)
     coupa_base_url: str = ""
-    coupa_token: str = ""
+    coupa_token: str = Field(default="", repr=False)
 
     identity_registry_path: str = ""
     authority_registry_path: str = ""
     trust_registry_path: str = ""
-    signing_seed_hex: str = ""
+    signing_seed_hex: str = Field(default="", repr=False)
     cors_origins: List[str] = Field(default_factory=list)
 
     @property
